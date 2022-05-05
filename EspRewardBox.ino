@@ -69,7 +69,7 @@ unsigned long timestamp;
 
 /* The log in credentials */
 #define AUTHOR_EMAIL "rewardbox2022@gmail.com"
-#define AUTHOR_PASSWORD "vsdbmb2312"
+#define AUTHOR_PASSWORD "*******************"
 
 /* Callback function to get the Email reading status */
 void imapCallback(IMAP_Status status);
@@ -150,7 +150,7 @@ void setup()
     }
     else{
       #define WIFI_SSID "BBS-Student"
-        #define WIFI_PASSWORD "gracetoyou"
+        #define WIFI_PASSWORD "**********"
       }
 
 
