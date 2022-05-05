@@ -1,6 +1,29 @@
+/**
+ * This example shows how to read Email and store the message in SD ccard.
+ * 
+ * Email: suwatchai@outlook.com
+ * 
+ * Github: https://github.com/mobizt/ESP-Mail-Client
+ * 
+ * Copyright (c) 2022 mobizt
+ *
+*/
+
+/** Assign SD card type and FS used in src/ESP_Mail_FS.h and 
+ * change the config for that card interfaces in src/addons/SDHelper.h
+*/
+
 #include <Arduino.h>
 #if defined(ESP32)
 #include <WiFi.h>
+#elif defined(ESP8266)
+#include <ESP8266WiFi.h>
+#else
+
+//Other Client defined here
+//To use custom Client, define ENABLE_CUSTOM_CLIENT in  src/ESP_Mail_FS.h.
+//See the example Custom_Client.ino for how to use.
+
 #endif
 #include "time.h"
 
@@ -13,9 +36,29 @@
 BluetoothSerial SerialBT;
 
 
+//Provide the SD card interfaces setting and mounting
+#include <extras/SDHelper.h>
+
+
 const char* ntpServer = "pool.ntp.org";
 
 unsigned long timestamp;
+
+/** For Gmail, IMAP option should be enabled. https://support.google.com/mail/answer/7126229?hl=en
+ * and also https://accounts.google.com/b/0/DisplayUnlockCaptcha
+ *
+ * Some Gmail user still not able to sign in using account password even above options were set up,
+ * for this case, use "App Password" to sign in instead.
+ * About Gmail "App Password", go to https://support.google.com/accounts/answer/185833?hl=en
+ *
+ * For Yahoo mail, log in to your yahoo mail in web browser and generate app password by go to
+ * https://login.yahoo.com/account/security/app-passwords/add/confirm?src=noSrc
+ *
+ * To use Gmai and Yahoo's App Password to sign in, define the AUTHOR_PASSWORD with your App Password
+ * and AUTHOR_EMAIL with your account email.
+*/
+
+/* The imap host name e.g. imap.gmail.com for GMail or outlook.office365.com for Outlook */
 #define IMAP_HOST "<host>"
 
 /** The imap port e.g. 
@@ -48,9 +91,11 @@ IMAPSession imap;
 
 String message;
 int timeofmessage=0;
+int user_message=0;
 String BTdata;
-String WIFIusername;
-String WIFIpassword;
+int wifis;
+String WIFIusername="";
+String WIFIpassword="";
 unsigned long getTime() {
   time_t now;
   struct tm timeinfo;
@@ -69,10 +114,30 @@ void setup()
     SerialBT.begin();
     Serial.println("Bluetooth Started! Ready to pair...");
     SerialBT.println("Type your Wifi Network and then press enter and type in your Wifi Password");
-    int n = WiFi.scanNetworks();
+    wifis = WiFi.scanNetworks();
+    Serial.println("scan done");
+    if (wifis == 0) {
+        Serial.println("no networks found");
+    } else {
+        Serial.print(wifis);
+        Serial.println(" networks found");
+        for (int i = 0; i < wifis; ++i) {
+            // Print SSID and RSSI for each network found
+            //Serial.print(i + 1);
+            //Serial.print(": ");
+            //Serial.print(WiFi.SSID(i));
+            //wifinetworks[i]=WiFi.SSID(i);
+            //Serial.print(" (");
+            //Serial.print(WiFi.RSSI(i));
+            //Serial.print(")");
+            //Serial.println((WiFi.encryptionType(i) == WIFI_AUTH_OPEN)?" ":"*");
+            delay(10);
+        }
+    }
+    Serial.println("");
     if (SerialBT.available()){
       BTdata=SerialBT.read();
-      for(int i = 0; i < n; i++) {
+      for(int i = 0; i < wifis; i++) {
           if (BTdata==WiFi.SSID(i)){
             WIFIusername=BTdata;
             }
@@ -85,7 +150,7 @@ void setup()
     }
     else{
       #define WIFI_SSID "BBS-Student"
-      #define WIFI_PASSWORD "gracetoyou"
+        #define WIFI_PASSWORD "gracetoyou"
       }
 
 
@@ -113,14 +178,33 @@ void setup()
     Serial.println(WiFi.localIP());
     Serial.println();
 
+#if defined(ESP_MAIL_DEFAULT_SD_FS) //defined in src/ESP_Mail_FS.h
+    //Mount SD card.
+    SD_Card_Mounting(); //See src/addons/SDHelper.h
+#endif
 
-
+    /** Enable the debug via Serial port
+     * 0 for no debugging
+     * 1 for basic level debugging
+     *
+     * Debug port can be changed via ESP_MAIL_DEFAULT_DEBUG_PORT in ESP_Mail_FS.h
+    */
     imap.debug(1);
 
     /* Set the callback function to get the reading results */
     imap.callback(imapCallback);
 
-    
+    /** In case the SD card/adapter was used for the file storagge, the SPI pins can be configure from
+     * MailClient.sdBegin function which may be different for ESP32 and ESP8266
+     * For ESP32, assign all of SPI pins
+     * MailClient.sdBegin(14,2,15,13)
+     * Which SCK = 14, MISO = 2, MOSI = 15 and SS = 13
+     * And for ESP8266, assign the CS pins of SPI port
+     * MailClient.sdBegin(15)
+     * Which pin 15 is the CS pin of SD card adapter
+    */
+
+    /* Declare the session config data */
     ESP_Mail_Session session;
 
     /* Set the session config */
@@ -166,7 +250,9 @@ void setup()
     /* Set to report the download progress via the default serial port */
     config.enable.download_status = true;
 
-
+    /* Header fields parsing is case insensitive by default to avoid uppercase header in some server e.g. iCloud
+    , to allow case sensitive parse, uncomment below line*/
+    //config.enable.header_case_sensitive = true;
 
     /* Set the limit of number of messages in the search results */
     config.limit.search = 5;
@@ -176,7 +262,11 @@ void setup()
     */
     config.limit.msg_size = 512;
 
-
+    /** Set the maximum attachments and inline images files size
+     * that can be downloaded in byte. 
+     * The file which its size is largger than this limit may be saved 
+     * as truncated file.
+    */
     config.limit.attachment_size = 1024 * 1024 * 5;
 
 
@@ -199,20 +289,39 @@ void setup()
     */
     config.fetch.uid = imap.getUID(imap.selectedFolder().msgCount());
 
-   
+    /* Set seen flag */
+
+    // The message with "Seen" flagged means the message was already read or seen by user.
+    // The default value of this option is set to false.
+    // If you want to set the message flag as "Seen", set this option to true.
+    // If this option is false, the message flag was unchanged.
+    // To set or remove flag from message, see Set_Flags.ino example.
+
+    // config.fetch.set_seen = true;
+
+    /* Read or search the Email and close the session */
+
+    //When message was fetched or read, the /Seen flag will not set or message remained in unseen or unread status,
+    //as this is the purpose of library (not UI application), user can set the message status as read by set \Seen flag
+    //to message, see the Set_Flags.ino example.
+    MailClient.readMail(&imap);
+
+    /* Clear all stored data in IMAPSession object */
     imap.empty();
     configTime(0, 0, ntpServer);
 }
 
 void loop()
 {
+  
   timestamp=getTime();
   delay(1000);
-  if (timestamp-timeofmessage<=600 && message=="True"){
-      digitalWrite(12,HIGH);
-    }
-  else{
+  if (timestamp-user_message>=600){
       digitalWrite(12,LOW);
+    }
+  user_message=message.toInt();
+  if (timestamp-user_message<=600){
+      digitalWrite(12,HIGH);
     }
 }
 
@@ -281,6 +390,11 @@ void printAttacements(std::vector<IMAP_Attach_Item> &atts)
 void printMessages(std::vector<IMAP_MSG_Item> &msgItems, bool headerOnly)
 {
 
+    /** In devices other than ESP8266 and ESP32, if SD card was chosen as filestorage and 
+     * the standard SD.h library included in ESP_Mail_FS.h, files will be renamed due to long filename 
+     * (> 13 characters) is not support in the SD.h library.
+     * To show how its original file name, use imap.fileList().
+    */
     //Serial.println(imap.fileList());
 
     for (size_t i = 0; i < msgItems.size(); i++)
@@ -300,6 +414,10 @@ void printMessages(std::vector<IMAP_MSG_Item> &msgItems, bool headerOnly)
         //was not found in Content-Type header field.
         ESP_MAIL_PRINTF("Attachment: %s\n", msg.hasAttachment ? "yes" : "no");
 
+        if (strlen(msg.acceptLang))
+            ESP_MAIL_PRINTF("Accept Language: %s\n", msg.acceptLang);
+        if (strlen(msg.contentLang))
+            ESP_MAIL_PRINTF("Content Language: %s\n", msg.contentLang);
         if (strlen(msg.from))
             ESP_MAIL_PRINTF("From: %s\n", msg.from);
         if (strlen(msg.sender))
@@ -334,19 +452,37 @@ void printMessages(std::vector<IMAP_MSG_Item> &msgItems, bool headerOnly)
         {
             if (strlen(msg.text.content))
                 ESP_MAIL_PRINTF("Text Message: %s\n", msg.text.content);
-                message=msg.text.content;   
+                message=msg.text.content;
+                
             if (strlen(msg.text.charSet))
                 ESP_MAIL_PRINTF("Text Message Charset: %s\n", msg.text.charSet);
             if (strlen(msg.text.transfer_encoding))
                 ESP_MAIL_PRINTF("Text Message Transfer Encoding: %s\n", msg.text.transfer_encoding);
+            if (strlen(msg.html.content))
+                ESP_MAIL_PRINTF("HTML Message: %s\n", msg.html.content);
+            if (strlen(msg.html.charSet))
+                ESP_MAIL_PRINTF("HTML Message Charset: %s\n", msg.html.charSet);
+            if (strlen(msg.html.transfer_encoding))
+                ESP_MAIL_PRINTF("HTML Message Transfer Encoding: %s\n\n", msg.html.transfer_encoding);
 
             if (msg.rfc822.size() > 0)
             {
                 ESP_MAIL_PRINTF("\r\nRFC822 Messages: %d message(s)\n****************************\n", msg.rfc822.size());
                 printMessages(msg.rfc822, headerOnly);
             }
+
+            if (msg.attachments.size() > 0)
+                printAttacements(msg.attachments);
+        }
+        if (headerOnly)
+        {
+          ESP_MAIL_PRINTF("Doesnt Work");
         }
 
+          /*message.toCharArray(char_array,message_length);
+          for (int i=0;i<message_length;i++){
+            Serial.println(message[i]);
+          }*/
        
     }
      Serial.println();
